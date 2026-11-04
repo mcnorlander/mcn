@@ -23,6 +23,7 @@
   input, textarea { font: inherit; color: inherit; border: 0; background: transparent; width: 100%; padding: 0 2px; margin: 0; outline: none; }
   input:focus, textarea:focus { background: #fff6b3; }
   input.t, input.n { text-align: center; }
+  input[readonly]:focus { background: transparent; }
   input.bad { color: #c00; text-decoration: underline wavy #c00; }
   textarea { resize: none; display: block; }
 
@@ -117,7 +118,7 @@
   <button id="save-pdfs" title="Opens the print dialog once per form, with today's date in the filename. Choose Save as PDF.">Save PDFs</button>
   <button id="clear">Clear period</button>
   <div class="hint" id="hint-fuel" hidden>◀ ▶ change the month; each month is its own sheet. Type the day and the month fills in. Enter or ↓ moves down a column, Tab moves across. Bus numbers carry over from month to month.</div>
-  <div class="hint" id="hint-ts">Times: type 645, 6:45, 230p, 7:30pm. With no a/p, 6–11 means AM, 12 is noon and 1–5 is PM. An Out earlier than its In is read as later in the day. Enter or ↓ moves down a column, Shift+Enter or ↑ moves up, Tab moves across. School columns take hours (1.5 or 1:30); Hours Worked turns red if they don't add up to it. Entries save automatically in this browser.</div>
+  <div class="hint" id="hint-ts">Times: type 645, 6:45, 230p, 7:30pm. With no a/p, 6–11 means AM, 12 is noon and 1–5 is PM. An Out earlier than its In is read as later in the day. Enter or ↓ moves down a column, Shift+Enter or ↑ moves up, Tab moves across. With the times beside it blank, Total (or Hours Worked) takes hours typed in directly. School columns take hours (1.5 or 1:30); Hours Worked turns red if they don't add up to it. Entries save automatically in this browser.</div>
 </div>
 
 <!-- ================= TIMESHEET ================= -->
@@ -235,7 +236,8 @@ function buildTimesheet() {
       if (!s) h += `<td class="day" rowspan="2">${TS_DAYS[d]}</td><td class="date" rowspan="2" id="tsd-${idx}"></td>`;
       for (let g = 0; g < 4; g++) {
         const k = `ts-${idx}-${s}-${g}`;
-        h += `<td>${inp(k + '-i', 't', g * 3)}</td><td>${inp(k + '-o', 't', g * 3 + 1, `data-in="${k}-i"`)}</td><td class="tot" id="${k}-t"></td>`;
+        h += `<td>${inp(k + '-i', 't', g * 3)}</td><td>${inp(k + '-o', 't', g * 3 + 1, `data-in="${k}-i"`)}</td>` +
+          `<td class="tot">${inp(k + '-t', 'n', g * 3 + 2, `id="${k}-t"`)}</td>`;
       }
       h += '</tr>';
     }
@@ -266,7 +268,7 @@ function buildTrip() {
         h += `<tr data-day="${idx}"><td class="lbl">${name} - ${acct}</td>` +
           `<td>${inp(k + '-i1', 't', 0)}</td><td>${inp(k + '-o1', 't', 1, `data-in="${k}-i1"`)}</td>` +
           `<td>${inp(k + '-i2', 't', 2)}</td><td>${inp(k + '-o2', 't', 3, `data-in="${k}-i2"`)}</td>` +
-          `<td class="tot" id="${k}-h"></td>` +
+          `<td class="tot">${inp(k + '-h', 'n', 4, `id="${k}-h"`)}</td>` +
           SCHOOLS.map((_, j) => `<td>${inp(`${k}-s${j}`, 'n', 5 + j)}</td>`).join('') + '</tr>';
       });
     }
@@ -303,8 +305,22 @@ function currentIdx() { return Math.floor((todayUTC() - ANCHOR) / (14 * DAY_MS))
 
 function save() {
   const data = {};
-  fields().forEach(el => { if (el.value) data[el.dataset.k] = el.value; });
+  fields().forEach(el => { if (el.value && !el.dataset.auto) data[el.dataset.k] = el.value; });
   Object.keys(data).length ? store.set(keyFor(periodIdx), data) : store.del(keyFor(periodIdx));
+}
+
+// A total is calculated while any of its time fields has text; with them all
+// blank it takes hours typed in directly. Returns the row's minutes.
+function rowTotal(id, timeKeys, mins) {
+  const el = document.getElementById(id);
+  if (timeKeys.some(k => val(k).trim())) {
+    el.readOnly = true; el.dataset.auto = '1';
+    el.value = hrs(mins); el.classList.remove('bad');
+    return mins || 0;
+  }
+  if (el.dataset.auto) { delete el.dataset.auto; el.value = ''; }
+  el.readOnly = false;
+  return (parseHours(el.value) || 0) * 60;
 }
 
 function load(i) {
@@ -330,8 +346,7 @@ function recompute() {
   const wk = [[0, 0, 0, 0], [0, 0, 0, 0]];
   for (let idx = 0; idx < 14; idx++) for (let s = 0; s < 2; s++) for (let g = 0; g < 4; g++) {
     const k = `ts-${idx}-${s}-${g}`, d = duration(val(k + '-i'), val(k + '-o'));
-    set(k + '-t', hrs(d));
-    wk[idx < 7 ? 0 : 1][g] += d || 0;
+    wk[idx < 7 ? 0 : 1][g] += rowTotal(k + '-t', [k + '-i', k + '-o'], d);
   }
   for (let g = 0; g < 4; g++) {
     set(`ts-wk0-${g}`, hrs(wk[0][g]));
@@ -345,8 +360,7 @@ function recompute() {
   for (let idx = 0; idx < 14; idx++) for (let c = 0; c < 3; c++) {
     const k = `tr-${idx}-${c}`, wt = tw[idx < 7 ? 0 : 1];
     const d1 = duration(val(k + '-i1'), val(k + '-o1')), d2 = duration(val(k + '-i2'), val(k + '-o2'));
-    const mins = (d1 || 0) + (d2 || 0);
-    set(k + '-h', hrs(mins));
+    const mins = rowTotal(k + '-h', ['-i1', '-o1', '-i2', '-o2'].map(t => k + t), (d1 || 0) + (d2 || 0));
     wt.h += mins;
     let rowSchools = 0;
     SCHOOLS.forEach((_, j) => { const n = parseHours(val(`${k}-s${j}`)) || 0; wt.s[j] += n; rowSchools += n; });
